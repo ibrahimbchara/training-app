@@ -9,7 +9,7 @@ A comprehensive Progressive Web App (PWA) for tracking daily training progress, 
 
 ## 🎯 Live Demo
 
-**[Try the app here](https://validator-zone.com/bbtraining/)**
+
 
 ## 📱 Progressive Web App Features
 
