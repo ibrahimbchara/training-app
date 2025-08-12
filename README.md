@@ -7,9 +7,6 @@ A comprehensive Progressive Web App (PWA) for tracking daily training progress, 
 ![SQLite](https://img.shields.io/badge/SQLite-3-lightgrey)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind-CSS-38B2AC)
 
-## 🎯 Live Demo
-
-
 
 ## 📱 Progressive Web App Features
 
