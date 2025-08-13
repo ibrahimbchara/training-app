@@ -40,7 +40,17 @@ self.addEventListener('activate', event => {
 // Fetch event - serve cached content when offline
 self.addEventListener('fetch', event => {
   console.log('Service Worker: Fetch', event.request.url);
-  
+
+  // Skip chrome extension requests
+  if (event.request.url.startsWith('chrome-extension://')) {
+    return;
+  }
+
+  // Skip hash URLs (they don't need network requests)
+  if (event.request.url.includes('#')) {
+    return;
+  }
+
   // Handle API requests differently
   if (event.request.url.includes('api.php')) {
     // For API requests, try network first, then show offline message

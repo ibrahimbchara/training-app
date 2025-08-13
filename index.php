@@ -8,6 +8,7 @@
     <!-- PWA Meta Tags -->
     <meta name="description" content="Track your daily training progress and manage workout routines">
     <meta name="theme-color" content="#000000">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Training Tracker">
@@ -37,6 +38,16 @@
             }
         }
     </script>
+
+    <!-- Custom CSS for authentication -->
+    <style>
+        .edit-only {
+            display: none;
+        }
+        .edit-visible {
+            display: inline-block;
+        }
+    </style>
 </head>
 <body class="bg-white text-black min-h-screen">
     <!-- Navigation -->
@@ -49,6 +60,11 @@
                 <button onclick="navigateToSection('daily')" id="nav-daily" class="bg-white text-black px-4 py-2 rounded hover:bg-gray-200 transition font-medium">Daily Tracker</button>
                 <button onclick="navigateToSection('history')" id="nav-history" class="bg-white text-black px-4 py-2 rounded hover:bg-gray-200 transition font-medium">History</button>
             </div>
+            <div class="space-x-2">
+                <span id="login-status" class="text-white text-sm"></span>
+                <button onclick="showLoginModal()" id="login-btn" class="bg-white text-black px-4 py-2 rounded hover:bg-gray-200 transition font-medium border-2 border-white">Login</button>
+                <button onclick="logout()" id="logout-btn" class="bg-white text-black px-4 py-2 rounded hover:bg-gray-200 transition font-medium border-2 border-white hidden">Logout</button>
+            </div>
         </div>
     </nav>
 
@@ -56,7 +72,7 @@
     <section id="people-section" class="container mx-auto p-6">
         <div class="flex justify-between items-center mb-6">
             <h2 class="text-3xl font-bold">People Management</h2>
-            <button onclick="showAddPersonModal()" class="bg-black text-white px-6 py-3 rounded hover:bg-gray-800 transition font-medium">Add Person</button>
+            <button onclick="showAddPersonModal()" class="edit-only bg-black text-white px-6 py-3 rounded hover:bg-gray-800 transition font-medium">Add Person</button>
         </div>
         
         <div class="bg-white border-2 border-black rounded-lg overflow-hidden shadow-lg">
@@ -81,7 +97,7 @@
     <section id="trainings-section" class="container mx-auto p-6 hidden">
         <div class="flex justify-between items-center mb-6">
             <h2 class="text-3xl font-bold">Training Management</h2>
-            <button onclick="showAddTrainingModal()" class="bg-black text-white px-6 py-3 rounded hover:bg-gray-800 transition font-medium">Create Training</button>
+            <button onclick="showAddTrainingModal()" class="edit-only bg-black text-white px-6 py-3 rounded hover:bg-gray-800 transition font-medium">Create Training</button>
         </div>
         
         <div class="grid gap-6" id="trainings-grid">
@@ -92,7 +108,12 @@
     <!-- Daily Tracker Section -->
     <section id="daily-section" class="container mx-auto p-6 hidden">
         <div class="mb-6">
-            <h2 class="text-3xl font-bold mb-2">Daily Tracker</h2>
+            <div class="flex justify-between items-center mb-2">
+                <h2 class="text-3xl font-bold">Daily Tracker</h2>
+                <button onclick="showDayOffModal()" class="edit-only bg-black text-white px-4 py-2 rounded hover:bg-gray-800 transition font-medium">
+                    🗓️ Day Off Settings
+                </button>
+            </div>
             <p class="text-gray-600 text-lg" id="current-date"></p>
         </div>
         
@@ -103,14 +124,65 @@
 
     <!-- History Section -->
     <section id="history-section" class="container mx-auto p-6 hidden">
-        <h2 class="text-3xl font-bold mb-6">Training History</h2>
-        <div class="mb-4">
-            <select id="history-person-select" class="p-2 border-2 border-black rounded" onchange="loadPersonHistory()">
-                <option value="">Select a person to view history</option>
-            </select>
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-3xl font-bold">Training History & Analytics</h2>
+            <div class="flex space-x-4">
+                <select id="history-date-filter" onchange="loadAllHistory()" class="p-3 border-2 border-black rounded focus:outline-none focus:ring-2 focus:ring-gray-400">
+                    <option value="7">Last 7 days</option>
+                    <option value="30" selected>Last 30 days</option>
+                    <option value="90">Last 90 days</option>
+                    <option value="all">All time</option>
+                </select>
+                <button onclick="loadAllHistory()" class="bg-black text-white px-4 py-2 rounded hover:bg-gray-800 transition font-medium">Refresh</button>
+            </div>
         </div>
-        <div id="history-content">
-            <!-- History will be populated here -->
+
+        <!-- Summary Cards -->
+        <div id="history-summary" class="grid md:grid-cols-4 gap-4 mb-6">
+            <!-- Summary cards will be populated here -->
+        </div>
+
+        <!-- Training Progress Table -->
+        <div class="bg-white border-2 border-black rounded-lg overflow-hidden shadow-lg mb-6">
+            <div class="bg-black text-white p-4">
+                <h3 class="text-xl font-bold">📊 Training Progress Overview</h3>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead class="bg-gray-100">
+                        <tr id="training-headers">
+                            <th class="p-3 text-left font-bold border-b">Person</th>
+                            <!-- Training columns will be added dynamically -->
+                        </tr>
+                    </thead>
+                    <tbody id="training-progress-table">
+                        <!-- Progress data will be populated here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="bg-white border-2 border-black rounded-lg overflow-hidden shadow-lg">
+            <div class="bg-black text-white p-4">
+                <h3 class="text-xl font-bold">📅 Recent Activity</h3>
+            </div>
+            <div class="max-h-96 overflow-y-auto">
+                <table class="w-full">
+                    <thead class="bg-gray-100 sticky top-0">
+                        <tr>
+                            <th class="p-3 text-left font-bold border-b">Date</th>
+                            <th class="p-3 text-left font-bold border-b">Person</th>
+                            <th class="p-3 text-left font-bold border-b">Training</th>
+                            <th class="p-3 text-left font-bold border-b">Progress</th>
+                            <th class="p-3 text-left font-bold border-b">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recent-activity-table">
+                        <!-- Recent activity will be populated here -->
+                    </tbody>
+                </table>
+            </div>
         </div>
     </section>
 
@@ -216,6 +288,7 @@
                     <p class="text-sm text-gray-600">Target: <span id="progress-target"></span> reps</p>
                     <p class="text-xs text-gray-500 mt-1">Enter reps completed in this session</p>
                     <p class="text-xs text-orange-600 mt-1">💡 Use negative numbers to correct mistakes (e.g., -20 to remove 20 reps)</p>
+                    <p class="text-xs text-purple-600 mt-1">🚀 Over-achieving? Great! Extra reps won't affect tomorrow's target</p>
                 </div>
                 <div class="flex justify-end space-x-4">
                     <button type="button" onclick="hideAddProgressModal()" class="px-6 py-3 border-2 border-black rounded hover:bg-gray-100 transition font-medium">Cancel</button>
@@ -241,6 +314,79 @@
                 <div class="flex justify-end space-x-4">
                     <button type="button" onclick="hideUpdateWeightModal()" class="px-6 py-3 border-2 border-black rounded hover:bg-gray-100 transition font-medium">Cancel</button>
                     <button type="submit" class="bg-black text-white px-6 py-3 rounded hover:bg-gray-800 transition font-medium">Update Weight</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Login Modal -->
+    <div id="login-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-white p-8 rounded-lg border-2 border-black w-96 shadow-2xl">
+            <h3 class="text-2xl font-bold mb-6">🔐 Admin Login</h3>
+            <form id="login-form">
+                <div class="mb-4">
+                    <label class="block text-sm font-bold mb-2">Username</label>
+                    <input type="text" id="login-username" class="w-full p-3 border-2 border-black rounded focus:outline-none focus:ring-2 focus:ring-gray-400" required>
+                </div>
+                <div class="mb-6">
+                    <label class="block text-sm font-bold mb-2">Password</label>
+                    <input type="password" id="login-password" class="w-full p-3 border-2 border-black rounded focus:outline-none focus:ring-2 focus:ring-gray-400" required>
+                </div>
+                <div class="mb-4">
+                    <p class="text-xs text-gray-600">
+                        👀 <strong>View Mode:</strong> Anyone can view data<br>
+                        ✏️ <strong>Edit Mode:</strong> Login required to add/edit/delete
+                    </p>
+                </div>
+                <div class="flex justify-end space-x-4">
+                    <button type="button" onclick="hideLoginModal()" class="px-6 py-3 border-2 border-black rounded hover:bg-gray-100 transition font-medium">Cancel</button>
+                    <button type="submit" class="bg-black text-white px-6 py-3 rounded hover:bg-gray-800 transition font-medium">Login</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Day Off Settings Modal -->
+    <div id="day-off-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-white p-8 rounded-lg border-2 border-black w-96 shadow-2xl">
+            <h3 class="text-2xl font-bold mb-6">🗓️ Day Off Settings</h3>
+            <p class="text-gray-600 mb-4">Select which days of the week should be rest days (no training required):</p>
+
+            <form id="day-off-form">
+                <div class="space-y-3 mb-6">
+                    <label class="flex items-center">
+                        <input type="checkbox" id="day-off-0" class="mr-3 h-4 w-4">
+                        <span>Sunday</span>
+                    </label>
+                    <label class="flex items-center">
+                        <input type="checkbox" id="day-off-1" class="mr-3 h-4 w-4">
+                        <span>Monday</span>
+                    </label>
+                    <label class="flex items-center">
+                        <input type="checkbox" id="day-off-2" class="mr-3 h-4 w-4">
+                        <span>Tuesday</span>
+                    </label>
+                    <label class="flex items-center">
+                        <input type="checkbox" id="day-off-3" class="mr-3 h-4 w-4">
+                        <span>Wednesday</span>
+                    </label>
+                    <label class="flex items-center">
+                        <input type="checkbox" id="day-off-4" class="mr-3 h-4 w-4">
+                        <span>Thursday</span>
+                    </label>
+                    <label class="flex items-center">
+                        <input type="checkbox" id="day-off-5" class="mr-3 h-4 w-4">
+                        <span>Friday</span>
+                    </label>
+                    <label class="flex items-center">
+                        <input type="checkbox" id="day-off-6" class="mr-3 h-4 w-4">
+                        <span>Saturday</span>
+                    </label>
+                </div>
+
+                <div class="flex justify-end space-x-4">
+                    <button type="button" onclick="hideDayOffModal()" class="px-6 py-3 border-2 border-black rounded hover:bg-gray-100 transition font-medium">Cancel</button>
+                    <button type="submit" class="bg-black text-white px-6 py-3 rounded hover:bg-gray-800 transition font-medium">Save Settings</button>
                 </div>
             </form>
         </div>

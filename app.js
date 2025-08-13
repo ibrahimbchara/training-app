@@ -4,6 +4,7 @@ let people = [];
 let trainings = [];
 let currentTrainingId = null;
 let currentPersonId = null;
+let isLoggedIn = false;
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', function() {
@@ -38,6 +39,14 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('edit-training-form').addEventListener('submit', handleEditTraining);
         document.getElementById('add-progress-form').addEventListener('submit', handleAddProgress);
         document.getElementById('update-weight-form').addEventListener('submit', handleUpdateWeight);
+        document.getElementById('login-form').addEventListener('submit', handleLogin);
+        document.getElementById('day-off-form').addEventListener('submit', saveDayOffSettings);
+
+        // Initialize edit mode (hide buttons initially)
+        initializeEditMode();
+
+        // Check login status
+        checkLoginStatus();
         
         console.log('PHP app initialized successfully');
     } catch (error) {
@@ -58,6 +67,9 @@ window.addEventListener('hashchange', function() {
 function navigateToSection(section) {
     showSection(section);
 }
+
+// Make navigation function global
+window.navigateToSection = navigateToSection;
 
 // Navigation
 function showSection(section) {
@@ -102,10 +114,13 @@ function showSection(section) {
     } else if (section === 'history') {
         updateHistoryPeople();
     }
+
+    // Apply authentication state to the newly shown section
+    setTimeout(() => applyAuthenticationState(), 100);
 }
 
 // API calls for PHP backend
-async function apiCall(endpoint, method = 'GET', data = null) {
+async function apiCall(endpoint, method = 'GET', data = null, queryParams = null) {
     const options = {
         method,
         headers: {
@@ -117,18 +132,35 @@ async function apiCall(endpoint, method = 'GET', data = null) {
         options.body = JSON.stringify(data);
     }
 
-    // Add endpoint as a query parameter for PHP routing
-    const url = `api.php?endpoint=${encodeURIComponent(endpoint)}&method=${method}`;
+    // Build URL with query parameters
+    let url = `api.php?endpoint=${encodeURIComponent(endpoint)}&method=${method}`;
+
+    // Add additional query parameters if provided
+    if (queryParams) {
+        Object.keys(queryParams).forEach(key => {
+            url += `&${encodeURIComponent(key)}=${encodeURIComponent(queryParams[key])}`;
+        });
+    }
 
     try {
         const response = await fetch(url, options);
         if (!response.ok) {
+            if (response.status === 401) {
+                const errorData = await response.json();
+                if (errorData.login_required) {
+                    alert('🔐 Login required to perform this action.');
+                    showLoginModal();
+                    throw new Error('Authentication required');
+                }
+            }
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         return await response.json();
     } catch (error) {
         console.error('API call failed:', error);
-        alert('An error occurred. Please try again.');
+        if (error.message !== 'Authentication required') {
+            alert('An error occurred. Please try again.');
+        }
         throw error;
     }
 }
@@ -140,6 +172,8 @@ async function loadPeople() {
         renderPeopleTable();
         updateParticipantsList();
         updateHistoryPeople();
+        // Apply current authentication state to newly rendered content
+        applyAuthenticationState();
     } catch (error) {
         console.error('Failed to load people:', error);
     }
@@ -164,11 +198,11 @@ function renderPeopleTable() {
             <td class="p-4">${person.current_weight || 'Not set'}</td>
             <td class="p-4 space-x-2">
                 <button onclick="showUpdateWeightModal(${person.id}, '${person.name}')"
-                        class="bg-black text-white px-3 py-1 rounded text-sm hover:bg-gray-800 transition">
+                        class="edit-only bg-black text-white px-3 py-1 rounded text-sm hover:bg-gray-800 transition">
                     Update Weight
                 </button>
                 <button onclick="deletePerson(${person.id}, '${person.name}')"
-                        class="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 transition">
+                        class="edit-only bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 transition">
                     Delete
                 </button>
             </td>
@@ -257,6 +291,8 @@ async function loadTrainings() {
     try {
         trainings = await apiCall('/trainings');
         renderTrainingsGrid();
+        // Apply current authentication state to newly rendered content
+        applyAuthenticationState();
     } catch (error) {
         console.error('Failed to load trainings:', error);
     }
@@ -279,11 +315,11 @@ function renderTrainingsGrid() {
                 </div>
                 <div class="flex space-x-2 ml-4">
                     <button onclick="showEditTrainingModal(${training.id})"
-                            class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 transition">
+                            class="edit-only bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 transition">
                         Edit
                     </button>
                     <button onclick="deleteTraining(${training.id}, '${training.name}')"
-                            class="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 transition">
+                            class="edit-only bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 transition">
                         Delete
                     </button>
                 </div>
@@ -439,6 +475,8 @@ async function loadDailyTrainings() {
     try {
         const dailyTrainings = await apiCall(`/daily-trainings/${today}`);
         renderDailyTrainings(dailyTrainings);
+        // Apply current authentication state to newly rendered content
+        applyAuthenticationState();
     } catch (error) {
         console.error('Failed to load daily trainings:', error);
     }
@@ -447,6 +485,23 @@ async function loadDailyTrainings() {
 function renderDailyTrainings(dailyTrainings) {
     const container = document.getElementById('daily-trainings');
     container.innerHTML = '';
+
+    // Check if today is a rest day
+    if (dailyTrainings.is_rest_day) {
+        const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+        container.innerHTML = `
+            <div class="bg-white border-2 border-black rounded-lg p-8 shadow-lg text-center">
+                <div class="text-6xl mb-4">🛌</div>
+                <h3 class="text-2xl font-bold mb-2">Rest Day</h3>
+                <p class="text-gray-600 text-lg mb-4">Today is ${today} - a scheduled rest day!</p>
+                <p class="text-gray-500">No training required today. Enjoy your rest! 😊</p>
+                <div class="mt-6 text-sm text-gray-400">
+                    Training will resume on the next scheduled training day.
+                </div>
+            </div>
+        `;
+        return;
+    }
 
     if (dailyTrainings.length === 0) {
         container.innerHTML = '<p class="text-gray-500 text-center py-8">No trainings scheduled for today. Create some trainings first!</p>';
@@ -467,6 +522,23 @@ function renderDailyTrainings(dailyTrainings) {
             const remaining = totalTarget - completed;
             const personId = people.find(p => p.name === name)?.id;
 
+            // Determine status and remaining text
+            let statusText = '';
+            let statusColor = 'text-gray-500';
+
+            if (completed >= totalTarget) {
+                if (completed > totalTarget) {
+                    statusText = `Over Achieved! +${completed - totalTarget} extra`;
+                    statusColor = 'text-purple-600';
+                } else {
+                    statusText = 'Target Completed! 🎉';
+                    statusColor = 'text-green-600';
+                }
+            } else {
+                statusText = `Remaining: ${remaining}`;
+                statusColor = 'text-gray-500';
+            }
+
             return `
                 <div class="flex justify-between items-center py-2 border-b border-gray-200">
                     <div class="flex-1">
@@ -476,10 +548,10 @@ function renderDailyTrainings(dailyTrainings) {
                     <div class="flex items-center space-x-4">
                         <div class="text-right">
                             <span class="text-green-600">${completed}/${totalTarget}</span>
-                            <span class="text-gray-500 text-sm block">Remaining: ${remaining}</span>
+                            <span class="${statusColor} text-sm block">${statusText}</span>
                         </div>
                         <button onclick="showAddProgressModal(${training.id}, '${training.name}', ${totalTarget}, ${personId}, '${name}')"
-                                class="bg-black text-white px-3 py-1 rounded text-sm hover:bg-gray-800 transition">
+                                class="edit-only bg-black text-white px-3 py-1 rounded text-sm hover:bg-gray-800 transition">
                             Add
                         </button>
                     </div>
@@ -596,89 +668,395 @@ async function handleAddProgress(e) {
     }
 }
 
-// History
+// History - New comprehensive view
 function updateHistoryPeople() {
-    const select = document.getElementById('history-person-select');
-    select.innerHTML = '<option value="">Select a person to view history</option>';
-
-    people.forEach(person => {
-        const option = document.createElement('option');
-        option.value = person.id;
-        option.textContent = person.name;
-        select.appendChild(option);
-    });
+    // Load all history data when history section is accessed
+    loadAllHistory();
 }
 
-async function loadPersonHistory() {
-    const personId = document.getElementById('history-person-select').value;
-    if (!personId) {
-        document.getElementById('history-content').innerHTML = '';
-        return;
-    }
+async function loadAllHistory() {
+    const days = document.getElementById('history-date-filter').value;
 
     try {
-        const [trainingHistory, weightHistory] = await Promise.all([
-            apiCall(`/history/person/${personId}`),
-            apiCall(`/weight-history/${personId}`)
+        const [summary, progressMatrix, recentActivity] = await Promise.all([
+            apiCall(`/history/summary`, 'GET', null, { days }),
+            apiCall(`/history/progress-matrix`, 'GET', null, { days }),
+            apiCall(`/history/all`, 'GET', null, { days })
         ]);
 
-        renderPersonHistory(trainingHistory, weightHistory);
+        renderHistorySummary(summary);
+        renderProgressMatrix(progressMatrix);
+        renderRecentActivity(recentActivity);
     } catch (error) {
-        console.error('Failed to load person history:', error);
+        console.error('Failed to load history:', error);
     }
 }
 
-function renderPersonHistory(trainingHistory, weightHistory) {
-    const container = document.getElementById('history-content');
+function renderHistorySummary(summary) {
+    const container = document.getElementById('history-summary');
 
-    let html = '<div class="grid md:grid-cols-2 gap-6">';
+    const completionRate = summary.avg_completion_rate || 0;
+    const totalSessions = summary.total_sessions || 0;
+    const completedSessions = summary.completed_sessions || 0;
 
-    // Training history
-    html += `
-        <div class="bg-white border-2 border-black rounded-lg p-6">
-            <h3 class="text-xl font-bold mb-4">Training History</h3>
-            <div class="space-y-2 max-h-96 overflow-y-auto">
+    container.innerHTML = `
+        <div class="bg-white border-2 border-black rounded-lg p-4 shadow-lg">
+            <div class="text-2xl font-bold text-blue-600">${summary.total_people || 0}</div>
+            <div class="text-sm text-gray-600">Active People</div>
+        </div>
+        <div class="bg-white border-2 border-black rounded-lg p-4 shadow-lg">
+            <div class="text-2xl font-bold text-green-600">${summary.total_trainings || 0}</div>
+            <div class="text-sm text-gray-600">Training Programs</div>
+        </div>
+        <div class="bg-white border-2 border-black rounded-lg p-4 shadow-lg">
+            <div class="text-2xl font-bold text-purple-600">${summary.total_reps || 0}</div>
+            <div class="text-sm text-gray-600">Total Reps Completed</div>
+        </div>
+        <div class="bg-white border-2 border-black rounded-lg p-4 shadow-lg">
+            <div class="text-2xl font-bold text-orange-600">${Math.round(completionRate)}%</div>
+            <div class="text-sm text-gray-600">Average Completion Rate</div>
+        </div>
     `;
+}
 
-    if (trainingHistory.length === 0) {
-        html += '<p class="text-gray-500">No training history found.</p>';
-    } else {
-        trainingHistory.forEach(record => {
-            html += `
-                <div class="flex justify-between items-center py-2 border-b border-gray-200">
-                    <div>
-                        <span class="font-medium">${record.training_name}</span>
-                        <span class="text-gray-500 text-sm block">${new Date(record.date).toLocaleDateString()}</span>
-                    </div>
-                    <span class="text-green-600">${record.completed_reps}/${record.target_reps}</span>
-                </div>
-            `;
+function renderProgressMatrix(progressData) {
+    const container = document.getElementById('training-progress-table');
+    const headers = document.getElementById('training-headers');
+
+    // Get unique trainings for headers
+    const trainings = [...new Set(progressData.map(item => item.training_name))];
+
+    // Update headers
+    headers.innerHTML = '<th class="p-3 text-left font-bold border-b">Person</th>';
+    trainings.forEach(training => {
+        headers.innerHTML += `<th class="p-3 text-center font-bold border-b">${training}</th>`;
+    });
+    headers.innerHTML += '<th class="p-3 text-center font-bold border-b">Overall</th>';
+
+    // Group data by person
+    const peopleData = {};
+    progressData.forEach(item => {
+        if (!peopleData[item.person_name]) {
+            peopleData[item.person_name] = {};
+        }
+        peopleData[item.person_name][item.training_name] = item;
+    });
+
+    // Render rows
+    let html = '';
+    Object.keys(peopleData).forEach(personName => {
+        const personData = peopleData[personName];
+        let totalCompleted = 0;
+        let totalTarget = 0;
+        let totalDays = 0;
+
+        html += `<tr class="hover:bg-gray-50">`;
+        html += `<td class="p-3 font-medium border-b">${personName}</td>`;
+
+        trainings.forEach(training => {
+            const data = personData[training];
+            if (data) {
+                const completionRate = data.completion_rate || 0;
+                const statusColor = getStatusColor(completionRate);
+                const statusIcon = getStatusIcon(completionRate);
+
+                totalCompleted += data.total_completed || 0;
+                totalTarget += data.total_target || 0;
+                totalDays += data.total_days || 0;
+
+                html += `
+                    <td class="p-3 text-center border-b">
+                        <div class="flex flex-col items-center">
+                            <span class="${statusColor} text-lg">${statusIcon}</span>
+                            <span class="text-xs text-gray-600">${Math.round(completionRate)}%</span>
+                            <span class="text-xs text-gray-500">${data.total_completed}/${data.total_target}</span>
+                        </div>
+                    </td>
+                `;
+            } else {
+                html += `<td class="p-3 text-center border-b text-gray-400">-</td>`;
+            }
         });
-    }
 
-    html += '</div></div>';
+        // Overall column
+        const overallRate = totalTarget > 0 ? (totalCompleted / totalTarget) * 100 : 0;
+        const overallColor = getStatusColor(overallRate);
+        const overallIcon = getStatusIcon(overallRate);
 
-    // Weight history
-    html += `
-        <div class="bg-white border-2 border-black rounded-lg p-6">
-            <h3 class="text-xl font-bold mb-4">Weight History</h3>
-            <div class="space-y-2 max-h-96 overflow-y-auto">
-    `;
-
-    if (weightHistory.length === 0) {
-        html += '<p class="text-gray-500">No weight history found.</p>';
-    } else {
-        weightHistory.forEach(record => {
-            html += `
-                <div class="flex justify-between items-center py-2 border-b border-gray-200">
-                    <span class="text-gray-500">${new Date(record.recorded_date).toLocaleDateString()}</span>
-                    <span class="font-medium">${record.weight} kg</span>
+        html += `
+            <td class="p-3 text-center border-b bg-gray-50">
+                <div class="flex flex-col items-center">
+                    <span class="${overallColor} text-lg font-bold">${overallIcon}</span>
+                    <span class="text-sm font-bold">${Math.round(overallRate)}%</span>
+                    <span class="text-xs text-gray-500">${totalCompleted}/${totalTarget}</span>
                 </div>
-            `;
-        });
-    }
+            </td>
+        `;
 
-    html += '</div></div></div>';
+        html += `</tr>`;
+    });
 
     container.innerHTML = html;
 }
+
+function getStatusColor(completionRate) {
+    if (completionRate >= 110) return 'text-purple-600'; // Over-achiever
+    if (completionRate >= 100) return 'text-green-600';  // Perfect
+    if (completionRate >= 90) return 'text-green-500';   // Excellent
+    if (completionRate >= 70) return 'text-yellow-600';  // Good
+    if (completionRate >= 50) return 'text-orange-600';  // Needs improvement
+    return 'text-red-600'; // Poor/No activity
+}
+
+function getStatusIcon(completionRate) {
+    if (completionRate >= 110) return '🚀'; // Over-achiever
+    if (completionRate >= 100) return '🏆'; // Perfect completion
+    if (completionRate >= 90) return '✅';  // Excellent
+    if (completionRate >= 70) return '⚠️';  // Good
+    if (completionRate >= 50) return '📈';  // Needs improvement
+    if (completionRate > 0) return '❌';    // Poor
+    return '⭕'; // No activity
+}
+
+function renderRecentActivity(activityData) {
+    const container = document.getElementById('recent-activity-table');
+
+    // Sort by date descending and take last 50 entries
+    const recentData = activityData
+        .filter(item => item.date) // Only items with actual progress
+        .sort((a, b) => new Date(b.date) - new Date(a.date))
+        .slice(0, 50);
+
+    let html = '';
+    recentData.forEach(item => {
+        const date = new Date(item.date).toLocaleDateString();
+        const completionRate = item.target_reps > 0 ? (item.completed_reps / item.target_reps) * 100 : 0;
+        const statusColor = getStatusColor(completionRate);
+        const statusIcon = getStatusIcon(completionRate);
+
+        let statusText = '';
+        if (completionRate >= 110) {
+            statusText = 'Over Achieved';
+        } else if (completionRate >= 100) {
+            statusText = 'Completed';
+        } else if (item.status === 'partial') {
+            statusText = 'Partial';
+        } else if (item.status === 'missed') {
+            statusText = 'Missed';
+        } else {
+            statusText = item.status === 'completed' ? 'Completed' :
+                        item.status === 'partial' ? 'Partial' : 'Missed';
+        }
+
+        html += `
+            <tr class="hover:bg-gray-50">
+                <td class="p-3 border-b text-sm">${date}</td>
+                <td class="p-3 border-b font-medium">${item.person_name}</td>
+                <td class="p-3 border-b">${item.training_name}</td>
+                <td class="p-3 border-b">
+                    <span class="text-sm">${item.completed_reps}/${item.target_reps}</span>
+                    ${item.carried_forward > 0 ? `<span class="text-xs text-orange-600 block">+${item.carried_forward} carried</span>` : ''}
+                </td>
+                <td class="p-3 border-b">
+                    <span class="${statusColor}">${statusIcon} ${statusText}</span>
+                </td>
+            </tr>
+        `;
+    });
+
+    if (html === '') {
+        html = '<tr><td colspan="5" class="p-6 text-center text-gray-500">No recent activity found</td></tr>';
+    }
+
+    container.innerHTML = html;
+}
+
+// Authentication functions
+async function checkLoginStatus() {
+    try {
+        const response = await fetch('auth.php?check=1');
+        const data = await response.json();
+        updateLoginUI(data.logged_in, data.username);
+    } catch (error) {
+        console.error('Failed to check login status:', error);
+        updateLoginUI(false);
+    }
+}
+
+function updateLoginUI(loggedIn, username = null) {
+    isLoggedIn = loggedIn;
+    const loginBtn = document.getElementById('login-btn');
+    const logoutBtn = document.getElementById('logout-btn');
+    const loginStatus = document.getElementById('login-status');
+
+    if (loggedIn) {
+        loginBtn.classList.add('hidden');
+        logoutBtn.classList.remove('hidden');
+        loginStatus.textContent = `👤 ${username || 'Admin'}`;
+        enableEditMode();
+    } else {
+        loginBtn.classList.remove('hidden');
+        logoutBtn.classList.add('hidden');
+        loginStatus.textContent = '👀 View Only';
+        disableEditMode();
+    }
+}
+
+function enableEditMode() {
+    // Show all add/edit/delete buttons by removing the edit-only class and adding a visible class
+    document.querySelectorAll('.edit-only').forEach(el => {
+        el.classList.remove('edit-only');
+        el.classList.add('edit-visible');
+        el.style.display = 'inline-block';
+    });
+}
+
+function disableEditMode() {
+    // Hide all add/edit/delete buttons
+    document.querySelectorAll('.edit-only, .edit-visible').forEach(el => {
+        el.classList.remove('edit-visible');
+        el.classList.add('edit-only');
+        el.style.display = 'none';
+    });
+}
+
+// Initially hide all edit buttons on page load
+function initializeEditMode() {
+    disableEditMode();
+}
+
+// Apply current authentication state to all edit buttons
+function applyAuthenticationState() {
+    if (isLoggedIn) {
+        enableEditMode();
+    } else {
+        disableEditMode();
+    }
+}
+
+function showLoginModal() {
+    document.getElementById('login-modal').classList.remove('hidden');
+    document.getElementById('login-username').focus();
+}
+
+function hideLoginModal() {
+    document.getElementById('login-modal').classList.add('hidden');
+    document.getElementById('login-form').reset();
+}
+
+async function handleLogin(e) {
+    e.preventDefault();
+
+    const username = document.getElementById('login-username').value;
+    const password = document.getElementById('login-password').value;
+
+    try {
+        const response = await fetch('auth.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'login', username, password })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            hideLoginModal();
+            updateLoginUI(true, username);
+            // Force refresh of current section to show edit buttons
+            if (currentSection === 'people') {
+                renderPeopleTable();
+            } else if (currentSection === 'trainings') {
+                renderTrainingsGrid();
+            } else if (currentSection === 'daily') {
+                loadDailyTrainings();
+            }
+            alert('✅ Login successful! You can now edit data.');
+        } else {
+            alert('❌ Invalid credentials. Please try again.');
+        }
+    } catch (error) {
+        console.error('Login failed:', error);
+        alert('❌ Login failed. Please try again.');
+    }
+}
+
+async function logout() {
+    if (confirm('Are you sure you want to logout?')) {
+        try {
+            await fetch('auth.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'logout' })
+            });
+
+            updateLoginUI(false);
+            // Apply authentication state to current section
+            applyAuthenticationState();
+            alert('👋 Logged out successfully.');
+        } catch (error) {
+            console.error('Logout failed:', error);
+        }
+    }
+}
+
+// Day Off Settings Functions
+function showDayOffModal() {
+    loadDayOffSettings();
+    document.getElementById('day-off-modal').classList.remove('hidden');
+}
+
+function hideDayOffModal() {
+    document.getElementById('day-off-modal').classList.add('hidden');
+}
+
+async function loadDayOffSettings() {
+    try {
+        const settings = await apiCall('/day-off-settings');
+
+        // Update checkboxes based on settings
+        for (let day = 0; day <= 6; day++) {
+            const checkbox = document.getElementById(`day-off-${day}`);
+            if (checkbox) {
+                checkbox.checked = settings[day] || false;
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load day off settings:', error);
+    }
+}
+
+async function saveDayOffSettings(event) {
+    event.preventDefault();
+
+    try {
+        const settings = {};
+
+        // Collect checkbox states
+        for (let day = 0; day <= 6; day++) {
+            const checkbox = document.getElementById(`day-off-${day}`);
+            if (checkbox) {
+                settings[day] = checkbox.checked;
+            }
+        }
+
+        await apiCall('/day-off-settings', 'POST', settings);
+        hideDayOffModal();
+        alert('✅ Day off settings saved successfully!');
+
+        // Reload daily trainings to reflect changes
+        loadDailyTrainings();
+    } catch (error) {
+        console.error('Failed to save day off settings:', error);
+        alert('❌ Failed to save day off settings. Please try again.');
+    }
+}
+
+// Make authentication functions globally available
+window.showLoginModal = showLoginModal;
+window.hideLoginModal = hideLoginModal;
+window.logout = logout;
+
+// Make day off functions globally available
+window.showDayOffModal = showDayOffModal;
+window.hideDayOffModal = hideDayOffModal;
+window.saveDayOffSettings = saveDayOffSettings;

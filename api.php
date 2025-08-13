@@ -1,4 +1,6 @@
 <?php
+require_once 'auth.php';
+
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
@@ -83,10 +85,24 @@ function initializeDatabase() {
     } catch (PDOException $e) {
         // Column already exists, ignore error
     }
+
+    // Day off settings table
+    $db->exec("CREATE TABLE IF NOT EXISTS day_off_settings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        day_of_week INTEGER NOT NULL, -- 0=Sunday, 1=Monday, ..., 6=Saturday
+        is_day_off BOOLEAN DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(day_of_week)
+    )");
 }
 
 // Function to carry forward incomplete reps from previous day
 function carryForwardIncompleteReps($db, $currentDate) {
+    // Don't carry forward to rest days
+    if (!isTrainingDay($currentDate)) {
+        return;
+    }
+
     $previousDate = date('Y-m-d', strtotime($currentDate . ' -1 day'));
 
     // Get all incomplete progress from previous day
@@ -101,26 +117,29 @@ function carryForwardIncompleteReps($db, $currentDate) {
     foreach ($incompleteProgress as $progress) {
         $remaining = $progress['target_reps'] - $progress['completed_reps'];
 
-        // Check if today's record already exists
-        $checkStmt = $db->prepare("
-            SELECT id FROM daily_progress
-            WHERE person_id = ? AND training_id = ? AND date = ?
-        ");
-        $checkStmt->execute([$progress['person_id'], $progress['training_id'], $currentDate]);
-
-        if (!$checkStmt->fetch()) {
-            // Create today's record with carried forward reps
-            $insertStmt = $db->prepare("
-                INSERT INTO daily_progress (person_id, training_id, date, completed_reps, target_reps, carried_forward)
-                VALUES (?, ?, ?, 0, ?, ?)
+        // Only carry forward if there's actually a deficit (not over-achieved)
+        if ($remaining > 0) {
+            // Check if today's record already exists
+            $checkStmt = $db->prepare("
+                SELECT id FROM daily_progress
+                WHERE person_id = ? AND training_id = ? AND date = ?
             ");
-            $insertStmt->execute([
-                $progress['person_id'],
-                $progress['training_id'],
-                $currentDate,
-                $progress['target_reps'],
-                $remaining
-            ]);
+            $checkStmt->execute([$progress['person_id'], $progress['training_id'], $currentDate]);
+
+            if (!$checkStmt->fetch()) {
+                // Create today's record with carried forward reps
+                $insertStmt = $db->prepare("
+                    INSERT INTO daily_progress (person_id, training_id, date, completed_reps, target_reps, carried_forward)
+                    VALUES (?, ?, ?, 0, ?, ?)
+                ");
+                $insertStmt->execute([
+                    $progress['person_id'],
+                    $progress['training_id'],
+                    $currentDate,
+                    $progress['target_reps'],
+                    $remaining
+                ]);
+            }
         }
     }
 }
@@ -131,6 +150,11 @@ initializeDatabase();
 // Get request path and method from query parameters or URL
 $path = $_GET['endpoint'] ?? '';
 $method = $_GET['method'] ?? $_SERVER['REQUEST_METHOD'];
+
+// Clean up the path - remove query parameters if they exist
+if (strpos($path, '?') !== false) {
+    $path = substr($path, 0, strpos($path, '?'));
+}
 
 // Fallback to URL parsing if no query parameters
 if (empty($path)) {
@@ -162,6 +186,8 @@ try {
         echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
         
     } elseif ($path === '/people' && $method === 'POST') {
+        requireAuth(); // Require authentication for adding people
+
         $input = json_decode(file_get_contents('php://input'), true);
         
         $stmt = $db->prepare('INSERT INTO people (name, age, height) VALUES (?, ?, ?)');
@@ -183,6 +209,8 @@ try {
         ]);
         
     } elseif (preg_match('/^\/people\/(\d+)\/weight$/', $path, $matches) && $method === 'PUT') {
+        requireAuth(); // Require authentication for updating weight
+
         $personId = $matches[1];
         $input = json_decode(file_get_contents('php://input'), true);
         $today = date('Y-m-d');
@@ -193,6 +221,8 @@ try {
         echo json_encode(['success' => true]);
 
     } elseif (preg_match('/^\/people\/(\d+)$/', $path, $matches) && $method === 'DELETE') {
+        requireAuth(); // Require authentication for deleting people
+
         $personId = $matches[1];
 
         // Delete in order due to foreign key constraints
@@ -217,6 +247,8 @@ try {
         echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
         
     } elseif ($path === '/trainings' && $method === 'POST') {
+        requireAuth(); // Require authentication for creating trainings
+
         $input = json_decode(file_get_contents('php://input'), true);
         
         $stmt = $db->prepare('INSERT INTO training_types (name, daily_target) VALUES (?, ?)');
@@ -235,6 +267,8 @@ try {
         echo json_encode(['id' => $trainingId, 'name' => $input['name'], 'daily_target' => $input['daily_target']]);
 
     } elseif (preg_match('/^\/trainings\/(\d+)$/', $path, $matches) && $method === 'PUT') {
+        requireAuth(); // Require authentication for updating trainings
+
         $trainingId = $matches[1];
         $input = json_decode(file_get_contents('php://input'), true);
 
@@ -256,6 +290,8 @@ try {
         echo json_encode(['success' => true]);
 
     } elseif (preg_match('/^\/trainings\/(\d+)$/', $path, $matches) && $method === 'DELETE') {
+        requireAuth(); // Require authentication for deleting trainings
+
         $trainingId = $matches[1];
 
         // Delete in order due to foreign key constraints
@@ -280,6 +316,12 @@ try {
     } elseif (preg_match('/^\/daily-trainings\/(.+)$/', $path, $matches) && $method === 'GET') {
         $date = $matches[1];
 
+        // Check if today is a rest day
+        if (!isTrainingDay($date)) {
+            echo json_encode(['is_rest_day' => true, 'date' => $date]);
+            return;
+        }
+
         // First, carry forward any incomplete reps from previous day
         carryForwardIncompleteReps($db, $date);
 
@@ -297,6 +339,8 @@ try {
         echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
         
     } elseif ($path === '/daily-progress' && $method === 'POST') {
+        requireAuth(); // Require authentication for adding progress
+
         $input = json_decode(file_get_contents('php://input'), true);
 
         // Check existing progress
@@ -350,7 +394,118 @@ try {
         ");
         $stmt->execute([$personId]);
         echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
-        
+
+    } elseif ($path === '/history/all' && $method === 'GET') {
+        $days = $_GET['days'] ?? 30;
+
+        if ($days === 'all') {
+            $dateCondition = '';
+            $params = [];
+        } else {
+            $dateCondition = 'AND dp.date >= date("now", "-' . intval($days) . ' days")';
+            $params = [];
+        }
+
+        // Get comprehensive training data
+        $stmt = $db->prepare("
+            SELECT
+                p.id as person_id,
+                p.name as person_name,
+                t.id as training_id,
+                t.name as training_name,
+                t.daily_target,
+                dp.date,
+                dp.completed_reps,
+                dp.target_reps,
+                dp.carried_forward,
+                CASE
+                    WHEN dp.completed_reps >= dp.target_reps THEN 'completed'
+                    WHEN dp.completed_reps > 0 THEN 'partial'
+                    ELSE 'missed'
+                END as status
+            FROM people p
+            CROSS JOIN training_types t
+            LEFT JOIN training_participants tp ON p.id = tp.person_id AND t.id = tp.training_id
+            LEFT JOIN daily_progress dp ON p.id = dp.person_id AND t.id = dp.training_id $dateCondition
+            WHERE tp.person_id IS NOT NULL
+            ORDER BY dp.date DESC, p.name, t.name
+        ");
+        $stmt->execute($params);
+        echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+
+    } elseif ($path === '/history/summary' && $method === 'GET') {
+        $days = $_GET['days'] ?? 30;
+
+        if ($days === 'all') {
+            $dateCondition = '';
+        } else {
+            $dateCondition = 'AND dp.date >= date("now", "-' . intval($days) . ' days")';
+        }
+
+        // Get summary statistics
+        $stmt = $db->prepare("
+            SELECT
+                COUNT(DISTINCT p.id) as total_people,
+                COUNT(DISTINCT t.id) as total_trainings,
+                COUNT(dp.id) as total_sessions,
+                SUM(dp.completed_reps) as total_reps,
+                AVG(CASE WHEN dp.target_reps > 0 THEN (dp.completed_reps * 100.0 / dp.target_reps) ELSE 0 END) as avg_completion_rate,
+                COUNT(CASE WHEN dp.completed_reps >= dp.target_reps THEN 1 END) as completed_sessions,
+                COUNT(CASE WHEN dp.completed_reps > 0 AND dp.completed_reps < dp.target_reps THEN 1 END) as partial_sessions,
+                COUNT(CASE WHEN dp.completed_reps = 0 THEN 1 END) as missed_sessions
+            FROM people p
+            CROSS JOIN training_types t
+            LEFT JOIN training_participants tp ON p.id = tp.person_id AND t.id = tp.training_id
+            LEFT JOIN daily_progress dp ON p.id = dp.person_id AND t.id = dp.training_id $dateCondition
+            WHERE tp.person_id IS NOT NULL
+        ");
+        $stmt->execute();
+        echo json_encode($stmt->fetch(PDO::FETCH_ASSOC));
+
+    } elseif ($path === '/history/progress-matrix' && $method === 'GET') {
+        $days = $_GET['days'] ?? 30;
+
+        if ($days === 'all') {
+            $dateCondition = '';
+        } else {
+            $dateCondition = 'AND dp.date >= date("now", "-' . intval($days) . ' days")';
+        }
+
+        // Get progress matrix for table view
+        $stmt = $db->prepare("
+            SELECT
+                p.id as person_id,
+                p.name as person_name,
+                t.id as training_id,
+                t.name as training_name,
+                COUNT(dp.id) as total_days,
+                SUM(dp.completed_reps) as total_completed,
+                SUM(dp.target_reps) as total_target,
+                AVG(CASE WHEN dp.target_reps > 0 THEN (dp.completed_reps * 100.0 / dp.target_reps) ELSE 0 END) as completion_rate,
+                COUNT(CASE WHEN dp.completed_reps >= dp.target_reps THEN 1 END) as days_completed,
+                COUNT(CASE WHEN dp.completed_reps > 0 AND dp.completed_reps < dp.target_reps THEN 1 END) as days_partial,
+                COUNT(CASE WHEN dp.completed_reps = 0 OR dp.completed_reps IS NULL THEN 1 END) as days_missed
+            FROM people p
+            CROSS JOIN training_types t
+            LEFT JOIN training_participants tp ON p.id = tp.person_id AND t.id = tp.training_id
+            LEFT JOIN daily_progress dp ON p.id = dp.person_id AND t.id = dp.training_id $dateCondition
+            WHERE tp.person_id IS NOT NULL
+            GROUP BY p.id, p.name, t.id, t.name
+            ORDER BY p.name, t.name
+        ");
+        $stmt->execute();
+        echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+
+    } else if ($path === '/day-off-settings') {
+        if ($method === 'GET') {
+            $data = getDayOffSettings($db);
+            echo json_encode($data);
+        } else if ($method === 'POST') {
+            requireAuth();
+            $input = json_decode(file_get_contents('php://input'), true);
+            $result = updateDayOffSettings($db, $input);
+            echo json_encode($result);
+        }
     } else {
         http_response_code(404);
         echo json_encode(['error' => 'Endpoint not found']);
@@ -360,4 +515,60 @@ try {
     http_response_code(500);
     echo json_encode(['error' => $e->getMessage()]);
 }
+
+// Day off settings functions
+function getDayOffSettings($db) {
+    $stmt = $db->query("SELECT day_of_week, is_day_off FROM day_off_settings ORDER BY day_of_week");
+    $settings = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Convert to associative array for easier frontend handling
+    $result = [];
+    foreach ($settings as $setting) {
+        $result[$setting['day_of_week']] = (bool)$setting['is_day_off'];
+    }
+
+    return $result;
+}
+
+function updateDayOffSettings($db, $settings) {
+    try {
+        $db->beginTransaction();
+
+        // Clear existing settings
+        $db->exec("DELETE FROM day_off_settings");
+
+        // Insert new settings
+        $stmt = $db->prepare("INSERT INTO day_off_settings (day_of_week, is_day_off) VALUES (?, ?)");
+
+        foreach ($settings as $dayOfWeek => $isDayOff) {
+            if (is_numeric($dayOfWeek) && $dayOfWeek >= 0 && $dayOfWeek <= 6) {
+                $stmt->execute([$dayOfWeek, $isDayOff ? 1 : 0]);
+            }
+        }
+
+        $db->commit();
+        return ['success' => true, 'message' => 'Day off settings updated successfully'];
+    } catch (Exception $e) {
+        $db->rollBack();
+        throw $e;
+    }
+}
+
+function isTrainingDay($date) {
+    $db = getDatabase();
+    $dayOfWeek = date('w', strtotime($date)); // 0=Sunday, 1=Monday, ..., 6=Saturday
+
+    $stmt = $db->prepare("SELECT is_day_off FROM day_off_settings WHERE day_of_week = ?");
+    $stmt->execute([$dayOfWeek]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // If no setting found, assume it's a training day
+    if (!$result) {
+        return true;
+    }
+
+    // Return true if it's NOT a day off
+    return !$result['is_day_off'];
+}
+
 ?>
