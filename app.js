@@ -675,177 +675,49 @@ function updateHistoryPeople() {
 }
 
 async function loadAllHistory() {
-    const days = document.getElementById('history-date-filter').value;
-
     try {
-        const [summary, progressMatrix, recentActivity] = await Promise.all([
-            apiCall(`/history/summary`, 'GET', null, { days }),
-            apiCall(`/history/progress-matrix`, 'GET', null, { days }),
-            apiCall(`/history/all`, 'GET', null, { days })
-        ]);
-
-        renderHistorySummary(summary);
-        renderProgressMatrix(progressMatrix);
-        renderRecentActivity(recentActivity);
+        // Load all activity data without any date filter
+        const allActivity = await apiCall(`/history/all`, 'GET', null, { days: 'all' });
+        renderRecentActivity(allActivity);
     } catch (error) {
         console.error('Failed to load history:', error);
     }
 }
 
-function renderHistorySummary(summary) {
-    const container = document.getElementById('history-summary');
 
-    const completionRate = summary.avg_completion_rate || 0;
-    const totalSessions = summary.total_sessions || 0;
-    const completedSessions = summary.completed_sessions || 0;
-
-    container.innerHTML = `
-        <div class="bg-white border-2 border-black rounded-lg p-4 shadow-lg">
-            <div class="text-2xl font-bold text-blue-600">${summary.total_people || 0}</div>
-            <div class="text-sm text-gray-600">Active People</div>
-        </div>
-        <div class="bg-white border-2 border-black rounded-lg p-4 shadow-lg">
-            <div class="text-2xl font-bold text-green-600">${summary.total_trainings || 0}</div>
-            <div class="text-sm text-gray-600">Training Programs</div>
-        </div>
-        <div class="bg-white border-2 border-black rounded-lg p-4 shadow-lg">
-            <div class="text-2xl font-bold text-purple-600">${summary.total_reps || 0}</div>
-            <div class="text-sm text-gray-600">Total Reps Completed</div>
-        </div>
-        <div class="bg-white border-2 border-black rounded-lg p-4 shadow-lg">
-            <div class="text-2xl font-bold text-orange-600">${Math.round(completionRate)}%</div>
-            <div class="text-sm text-gray-600">Average Completion Rate</div>
-        </div>
-    `;
-}
-
-function renderProgressMatrix(progressData) {
-    const container = document.getElementById('training-progress-table');
-    const headers = document.getElementById('training-headers');
-
-    // Get unique trainings for headers
-    const trainings = [...new Set(progressData.map(item => item.training_name))];
-
-    // Update headers
-    headers.innerHTML = '<th class="p-3 text-left font-bold border-b">Person</th>';
-    trainings.forEach(training => {
-        headers.innerHTML += `<th class="p-3 text-center font-bold border-b">${training}</th>`;
-    });
-    headers.innerHTML += '<th class="p-3 text-center font-bold border-b">Overall</th>';
-
-    // Group data by person
-    const peopleData = {};
-    progressData.forEach(item => {
-        if (!peopleData[item.person_name]) {
-            peopleData[item.person_name] = {};
-        }
-        peopleData[item.person_name][item.training_name] = item;
-    });
-
-    // Render rows
-    let html = '';
-    Object.keys(peopleData).forEach(personName => {
-        const personData = peopleData[personName];
-        let totalCompleted = 0;
-        let totalTarget = 0;
-        let totalDays = 0;
-
-        html += `<tr class="hover:bg-gray-50">`;
-        html += `<td class="p-3 font-medium border-b">${personName}</td>`;
-
-        trainings.forEach(training => {
-            const data = personData[training];
-            if (data) {
-                const completionRate = data.completion_rate || 0;
-                const statusColor = getStatusColor(completionRate);
-                const statusIcon = getStatusIcon(completionRate);
-
-                totalCompleted += data.total_completed || 0;
-                totalTarget += data.total_target || 0;
-                totalDays += data.total_days || 0;
-
-                html += `
-                    <td class="p-3 text-center border-b">
-                        <div class="flex flex-col items-center">
-                            <span class="${statusColor} text-lg">${statusIcon}</span>
-                            <span class="text-xs text-gray-600">${Math.round(completionRate)}%</span>
-                            <span class="text-xs text-gray-500">${data.total_completed}/${data.total_target}</span>
-                        </div>
-                    </td>
-                `;
-            } else {
-                html += `<td class="p-3 text-center border-b text-gray-400">-</td>`;
-            }
-        });
-
-        // Overall column
-        const overallRate = totalTarget > 0 ? (totalCompleted / totalTarget) * 100 : 0;
-        const overallColor = getStatusColor(overallRate);
-        const overallIcon = getStatusIcon(overallRate);
-
-        html += `
-            <td class="p-3 text-center border-b bg-gray-50">
-                <div class="flex flex-col items-center">
-                    <span class="${overallColor} text-lg font-bold">${overallIcon}</span>
-                    <span class="text-sm font-bold">${Math.round(overallRate)}%</span>
-                    <span class="text-xs text-gray-500">${totalCompleted}/${totalTarget}</span>
-                </div>
-            </td>
-        `;
-
-        html += `</tr>`;
-    });
-
-    container.innerHTML = html;
-}
-
-function getStatusColor(completionRate) {
-    if (completionRate >= 110) return 'text-purple-600'; // Over-achiever
-    if (completionRate >= 100) return 'text-green-600';  // Perfect
-    if (completionRate >= 90) return 'text-green-500';   // Excellent
-    if (completionRate >= 70) return 'text-yellow-600';  // Good
-    if (completionRate >= 50) return 'text-orange-600';  // Needs improvement
-    return 'text-red-600'; // Poor/No activity
-}
-
-function getStatusIcon(completionRate) {
-    if (completionRate >= 110) return '🚀'; // Over-achiever
-    if (completionRate >= 100) return '🏆'; // Perfect completion
-    if (completionRate >= 90) return '✅';  // Excellent
-    if (completionRate >= 70) return '⚠️';  // Good
-    if (completionRate >= 50) return '📈';  // Needs improvement
-    if (completionRate > 0) return '❌';    // Poor
-    return '⭕'; // No activity
-}
 
 function renderRecentActivity(activityData) {
     const container = document.getElementById('recent-activity-table');
 
-    // Sort by date descending and take last 50 entries
-    const recentData = activityData
+    // Sort by date descending to show latest on top (show all records)
+    const allData = activityData
         .filter(item => item.date) // Only items with actual progress
-        .sort((a, b) => new Date(b.date) - new Date(a.date))
-        .slice(0, 50);
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
 
     let html = '';
-    recentData.forEach(item => {
+    allData.forEach(item => {
         const date = new Date(item.date).toLocaleDateString();
         const completionRate = item.target_reps > 0 ? (item.completed_reps / item.target_reps) * 100 : 0;
-        const statusColor = getStatusColor(completionRate);
-        const statusIcon = getStatusIcon(completionRate);
 
+        // Simplified status logic without external functions
         let statusText = '';
+        let statusColor = '';
+
         if (completionRate >= 110) {
             statusText = 'Over Achieved';
+            statusColor = 'text-purple-600';
         } else if (completionRate >= 100) {
             statusText = 'Completed';
-        } else if (item.status === 'partial') {
+            statusColor = 'text-green-600';
+        } else if (completionRate >= 50) {
             statusText = 'Partial';
-        } else if (item.status === 'missed') {
-            statusText = 'Missed';
+            statusColor = 'text-yellow-600';
+        } else if (completionRate > 0) {
+            statusText = 'Partial';
+            statusColor = 'text-orange-600';
         } else {
-            statusText = item.status === 'completed' ? 'Completed' :
-                        item.status === 'partial' ? 'Partial' : 'Missed';
+            statusText = 'Missed';
+            statusColor = 'text-red-600';
         }
 
         html += `
@@ -858,14 +730,14 @@ function renderRecentActivity(activityData) {
                     ${item.carried_forward > 0 ? `<span class="text-xs text-orange-600 block">+${item.carried_forward} carried</span>` : ''}
                 </td>
                 <td class="p-3 border-b">
-                    <span class="${statusColor}">${statusIcon} ${statusText}</span>
+                    <span class="${statusColor} font-medium">${statusText}</span>
                 </td>
             </tr>
         `;
     });
 
     if (html === '') {
-        html = '<tr><td colspan="5" class="p-6 text-center text-gray-500">No recent activity found</td></tr>';
+        html = '<tr><td colspan="5" class="p-6 text-center text-gray-500">No activity found</td></tr>';
     }
 
     container.innerHTML = html;
@@ -1056,7 +928,22 @@ window.showLoginModal = showLoginModal;
 window.hideLoginModal = hideLoginModal;
 window.logout = logout;
 
+// Debug function to clear carry forward data
+async function clearCarryForwardData() {
+    if (confirm('This will clear all carry-forward data from today and rest days, then recalculate. Are you sure?')) {
+        try {
+            await apiCall('/debug/clear-carry-forward', 'POST');
+            alert('✅ Carry-forward data cleared and recalculated successfully!');
+            loadDailyTrainings();
+        } catch (error) {
+            console.error('Failed to clear carry-forward data:', error);
+            alert('❌ Failed to clear carry-forward data.');
+        }
+    }
+}
+
 // Make day off functions globally available
 window.showDayOffModal = showDayOffModal;
 window.hideDayOffModal = hideDayOffModal;
 window.saveDayOffSettings = saveDayOffSettings;
+window.clearCarryForwardData = clearCarryForwardData;

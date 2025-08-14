@@ -86,6 +86,13 @@ function initializeDatabase() {
         // Column already exists, ignore error
     }
 
+    // Add carry_forward_date column if it doesn't exist (for existing databases)
+    try {
+        $db->exec("ALTER TABLE daily_progress ADD COLUMN carry_forward_date DATE NULL");
+    } catch (PDOException $e) {
+        // Column already exists, ignore error
+    }
+
     // Day off settings table
     $db->exec("CREATE TABLE IF NOT EXISTS day_off_settings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,15 +110,26 @@ function carryForwardIncompleteReps($db, $currentDate) {
         return;
     }
 
-    $previousDate = date('Y-m-d', strtotime($currentDate . ' -1 day'));
+    // Find the last training day (skip rest days)
+    $lastTrainingDate = $currentDate;
+    $daysBack = 1;
+    do {
+        $lastTrainingDate = date('Y-m-d', strtotime($currentDate . " -$daysBack day"));
+        $daysBack++;
+    } while (!isTrainingDay($lastTrainingDate) && $daysBack <= 7); // Max 7 days back
 
-    // Get all incomplete progress from previous day
+    // If no training day found in the last week, don't carry forward
+    if ($daysBack > 7) {
+        return;
+    }
+
+    // Get all incomplete progress from the last training day
     $stmt = $db->prepare("
         SELECT person_id, training_id, target_reps, completed_reps
         FROM daily_progress
         WHERE date = ? AND completed_reps < target_reps
     ");
-    $stmt->execute([$previousDate]);
+    $stmt->execute([$lastTrainingDate]);
     $incompleteProgress = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($incompleteProgress as $progress) {
@@ -138,6 +156,20 @@ function carryForwardIncompleteReps($db, $currentDate) {
                     $currentDate,
                     $progress['target_reps'],
                     $remaining
+                ]);
+            } else {
+                // Update existing record with carried forward reps
+                $updateStmt = $db->prepare("
+                    UPDATE daily_progress
+                    SET carried_forward = ?, target_reps = ?
+                    WHERE person_id = ? AND training_id = ? AND date = ?
+                ");
+                $updateStmt->execute([
+                    $remaining,
+                    $progress['target_reps'],
+                    $progress['person_id'],
+                    $progress['training_id'],
+                    $currentDate
                 ]);
             }
         }
@@ -327,7 +359,7 @@ try {
 
         $stmt = $db->prepare("
             SELECT DISTINCT t.id, t.name, t.daily_target,
-                   GROUP_CONCAT(p.name || ':' || COALESCE(dp.completed_reps, 0) || ':' || COALESCE(dp.carried_forward, 0)) as progress
+                   GROUP_CONCAT(p.name || ':' || COALESCE(dp.completed_reps, 0) || ':' || COALESCE(dp.carried_forward, 0) || ':' || COALESCE(dp.carry_forward_date, '')) as progress
             FROM training_types t
             JOIN training_participants tp ON t.id = tp.training_id
             JOIN people p ON tp.person_id = p.id
@@ -402,8 +434,9 @@ try {
             $dateCondition = '';
             $params = [];
         } else {
-            $dateCondition = 'AND dp.date >= date("now", "-' . intval($days) . ' days")';
-            $params = [];
+            $dateCondition = 'AND dp.date >= ?';
+            $cutoffDate = date('Y-m-d', strtotime("-$days days"));
+            $params = [$cutoffDate];
         }
 
         // Get comprehensive training data
@@ -419,6 +452,7 @@ try {
                 dp.target_reps,
                 dp.carried_forward,
                 CASE
+                    WHEN dp.completed_reps > dp.target_reps THEN 'over_achieved'
                     WHEN dp.completed_reps >= dp.target_reps THEN 'completed'
                     WHEN dp.completed_reps > 0 THEN 'partial'
                     ELSE 'missed'
@@ -426,7 +460,7 @@ try {
             FROM people p
             CROSS JOIN training_types t
             LEFT JOIN training_participants tp ON p.id = tp.person_id AND t.id = tp.training_id
-            LEFT JOIN daily_progress dp ON p.id = dp.person_id AND t.id = dp.training_id $dateCondition
+            INNER JOIN daily_progress dp ON p.id = dp.person_id AND t.id = dp.training_id $dateCondition
             WHERE tp.person_id IS NOT NULL
             ORDER BY dp.date DESC, p.name, t.name
         ");
@@ -438,8 +472,11 @@ try {
 
         if ($days === 'all') {
             $dateCondition = '';
+            $params = [];
         } else {
-            $dateCondition = 'AND dp.date >= date("now", "-' . intval($days) . ' days")';
+            $dateCondition = 'AND dp.date >= ?';
+            $cutoffDate = date('Y-m-d', strtotime("-$days days"));
+            $params = [$cutoffDate];
         }
 
         // Get summary statistics
@@ -459,7 +496,7 @@ try {
             LEFT JOIN daily_progress dp ON p.id = dp.person_id AND t.id = dp.training_id $dateCondition
             WHERE tp.person_id IS NOT NULL
         ");
-        $stmt->execute();
+        $stmt->execute($params);
         echo json_encode($stmt->fetch(PDO::FETCH_ASSOC));
 
     } elseif ($path === '/history/progress-matrix' && $method === 'GET') {
@@ -467,8 +504,11 @@ try {
 
         if ($days === 'all') {
             $dateCondition = '';
+            $params = [];
         } else {
-            $dateCondition = 'AND dp.date >= date("now", "-' . intval($days) . ' days")';
+            $dateCondition = 'AND dp.date >= ?';
+            $cutoffDate = date('Y-m-d', strtotime("-$days days"));
+            $params = [$cutoffDate];
         }
 
         // Get progress matrix for table view
@@ -493,7 +533,7 @@ try {
             GROUP BY p.id, p.name, t.id, t.name
             ORDER BY p.name, t.name
         ");
-        $stmt->execute();
+        $stmt->execute($params);
         echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
 
     } else if ($path === '/day-off-settings') {
@@ -506,6 +546,69 @@ try {
             $result = updateDayOffSettings($db, $input);
             echo json_encode($result);
         }
+    } else if ($path === '/debug/clear-carry-forward' && $method === 'POST') {
+        requireAuth();
+        // Clear all carried forward data from today and rest days
+        $today = date('Y-m-d');
+        $restDay = '2025-08-13'; // Wednesday rest day
+
+        // First, fix the August 12th data to match the correct values (all targets = 100)
+        // Abdullah (person_id=6): 40/100 (60 remaining)
+        $stmt = $db->prepare("UPDATE daily_progress SET completed_reps = 40, target_reps = 100 WHERE person_id = 6 AND date = '2025-08-12'");
+        $stmt->execute();
+
+        // Farris (person_id=3): 120/100 (over-achieved, 0 remaining)
+        $stmt = $db->prepare("UPDATE daily_progress SET completed_reps = 120, target_reps = 100 WHERE person_id = 3 AND date = '2025-08-12'");
+        $stmt->execute();
+
+        // Tariq (person_id=5): 60/100 (40 remaining)
+        $stmt = $db->prepare("UPDATE daily_progress SET completed_reps = 60, target_reps = 100 WHERE person_id = 5 AND date = '2025-08-12'");
+        $stmt->execute();
+
+        // Clear carry forward data from today
+        $stmt = $db->prepare("UPDATE daily_progress SET carried_forward = 0 WHERE date = ?");
+        $stmt->execute([$today]);
+
+        // Delete progress records from rest days (they shouldn't exist)
+        $stmt2 = $db->prepare("DELETE FROM daily_progress WHERE date = ?");
+        $stmt2->execute([$restDay]);
+
+        // Delete records for people who over-achieved and shouldn't have carry-forward
+        // Farris (person_id=3) over-achieved 120/100, so delete his August 14th record
+        $stmt3 = $db->prepare("DELETE FROM daily_progress WHERE person_id = 3 AND date = ? AND carried_forward = 0");
+        $stmt3->execute([$today]);
+
+        // Manually trigger carry forward for today
+        carryForwardIncompleteReps($db, $today);
+
+        // Get updated data to verify
+        $stmt3 = $db->prepare("SELECT person_id, carried_forward FROM daily_progress WHERE date = ?");
+        $stmt3->execute([$today]);
+        $updatedData = $stmt3->fetchAll(PDO::FETCH_ASSOC);
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'Historical data corrected and carry forward recalculated',
+            'updated_records' => $updatedData
+        ]);
+    } else if ($path === '/debug/database' && $method === 'GET') {
+        // Debug endpoint to check database contents
+        $stmt = $db->query("SELECT * FROM daily_progress ORDER BY date DESC LIMIT 20");
+        $progress = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $stmt2 = $db->query("SELECT * FROM day_off_settings ORDER BY day_of_week");
+        $dayOff = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+
+        $stmt3 = $db->query("SELECT * FROM people ORDER BY id");
+        $people = $stmt3->fetchAll(PDO::FETCH_ASSOC);
+
+        echo json_encode([
+            'recent_progress' => $progress,
+            'day_off_settings' => $dayOff,
+            'people' => $people,
+            'current_date' => date('Y-m-d'),
+            'current_day_of_week' => date('w')
+        ]);
     } else {
         http_response_code(404);
         echo json_encode(['error' => 'Endpoint not found']);

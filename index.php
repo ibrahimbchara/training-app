@@ -113,6 +113,9 @@
                 <button onclick="showDayOffModal()" class="edit-only bg-black text-white px-4 py-2 rounded hover:bg-gray-800 transition font-medium">
                     🗓️ Day Off Settings
                 </button>
+                <button onclick="clearCarryForwardData()" class="edit-only bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 transition font-medium text-sm">
+                    🔧 Fix Carry Forward
+                </button>
             </div>
             <p class="text-gray-600 text-lg" id="current-date"></p>
         </div>
@@ -124,52 +127,18 @@
 
     <!-- History Section -->
     <section id="history-section" class="container mx-auto p-6 hidden">
-        <div class="flex justify-between items-center mb-6">
+        <div class="mb-6">
             <h2 class="text-3xl font-bold">Training History & Analytics</h2>
-            <div class="flex space-x-4">
-                <select id="history-date-filter" onchange="loadAllHistory()" class="p-3 border-2 border-black rounded focus:outline-none focus:ring-2 focus:ring-gray-400">
-                    <option value="7">Last 7 days</option>
-                    <option value="30" selected>Last 30 days</option>
-                    <option value="90">Last 90 days</option>
-                    <option value="all">All time</option>
-                </select>
-                <button onclick="loadAllHistory()" class="bg-black text-white px-4 py-2 rounded hover:bg-gray-800 transition font-medium">Refresh</button>
-            </div>
         </div>
 
-        <!-- Summary Cards -->
-        <div id="history-summary" class="grid md:grid-cols-4 gap-4 mb-6">
-            <!-- Summary cards will be populated here -->
-        </div>
-
-        <!-- Training Progress Table -->
-        <div class="bg-white border-2 border-black rounded-lg overflow-hidden shadow-lg mb-6">
+        <!-- Activity -->
+        <div class="bg-white border-2 border-black rounded-lg overflow-hidden shadow-lg">
             <div class="bg-black text-white p-4">
-                <h3 class="text-xl font-bold">📊 Training Progress Overview</h3>
+                <h3 class="text-xl font-bold">Activity</h3>
             </div>
             <div class="overflow-x-auto">
                 <table class="w-full">
                     <thead class="bg-gray-100">
-                        <tr id="training-headers">
-                            <th class="p-3 text-left font-bold border-b">Person</th>
-                            <!-- Training columns will be added dynamically -->
-                        </tr>
-                    </thead>
-                    <tbody id="training-progress-table">
-                        <!-- Progress data will be populated here -->
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Recent Activity -->
-        <div class="bg-white border-2 border-black rounded-lg overflow-hidden shadow-lg">
-            <div class="bg-black text-white p-4">
-                <h3 class="text-xl font-bold">📅 Recent Activity</h3>
-            </div>
-            <div class="max-h-96 overflow-y-auto">
-                <table class="w-full">
-                    <thead class="bg-gray-100 sticky top-0">
                         <tr>
                             <th class="p-3 text-left font-bold border-b">Date</th>
                             <th class="p-3 text-left font-bold border-b">Person</th>
